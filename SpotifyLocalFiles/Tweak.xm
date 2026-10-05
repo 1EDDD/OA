@@ -459,10 +459,12 @@ static void SPFInstallUI(UIViewController *vc) {
     [vc.view bringSubviewToFront:panel];
 }
 
-%hook UIViewController
+static void (*SPFOriginalViewDidAppear)(UIViewController *self, SEL _cmd, BOOL animated) = NULL;
 
-- (void)viewDidAppear:(BOOL)animated {
-    %orig;
+static void SPFHookedViewDidAppear(UIViewController *self, SEL _cmd, BOOL animated) {
+    if (SPFOriginalViewDidAppear) {
+        SPFOriginalViewDidAppear(self, _cmd, animated);
+    }
 
     if (![NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.spotify.client"]) return;
 
@@ -471,10 +473,19 @@ static void SPFInstallUI(UIViewController *vc) {
     });
 }
 
-%end
-
-%ctor {
+__attribute__((constructor))
+static void SPFInitialize(void) {
     if (![NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.spotify.client"]) return;
+
+    Class vcClass = objc_getClass("UIViewController");
+    SEL selector = @selector(viewDidAppear:);
+    Method method = class_getInstanceMethod(vcClass, selector);
+
+    if (method) {
+        SPFOriginalViewDidAppear =
+            (void (*)(UIViewController *, SEL, BOOL))method_getImplementation(method);
+        method_setImplementation(method, (IMP)SPFHookedViewDidAppear);
+    }
 
     NSLog(@"[SpotifyLocalFiles] loaded - Spotify %@",
           [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"]);
