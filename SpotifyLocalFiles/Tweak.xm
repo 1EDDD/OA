@@ -171,15 +171,10 @@ static AVAudioPlayer *SPFPlayer = nil;
     presenter = [self topControllerFrom:presenter];
     self.pendingPlaylist = [self playlistContextFrom:presenter];
 
-    UIDocumentPickerViewController *picker = nil;
-    if (@available(iOS 14.0, *)) {
-        picker = [[UIDocumentPickerViewController alloc]
-                  initForOpeningContentTypes:@[UTTypeAudio]
-                  asCopy:YES];
-    } else {
-        picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.audio"]
-                                                                          inMode:UIDocumentPickerModeImport];
-    }
+    UIDocumentPickerViewController *picker =
+        [[UIDocumentPickerViewController alloc]
+         initForOpeningContentTypes:@[UTTypeAudio]
+         asCopy:YES];
 
     picker.delegate = self;
     picker.allowsMultipleSelection = NO;
@@ -449,7 +444,6 @@ static void SPFInstallUI(UIViewController *vc) {
         [item setTitle:title forState:UIControlStateNormal];
         [item setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
         item.titleLabel.font = [UIFont systemFontOfSize:12.0 weight:UIFontWeightSemibold];
-        item.contentEdgeInsets = UIEdgeInsetsMake(0, 12, 0, 12);
 
         [item addAction:[UIAction actionWithHandler:^(__unused UIAction *action) {
             [[SPFStore shared] playTrack:track];
