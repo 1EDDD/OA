@@ -1,0 +1,7 @@
+Package: com.1eddd.spotify-local-files
+Name: SpotifyLocalFiles
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: Local audio importer and player overlay for Spotify 9.0.48 in LiveContainer.
+Maintainer: 1EDDD
+Section: Tweaks
