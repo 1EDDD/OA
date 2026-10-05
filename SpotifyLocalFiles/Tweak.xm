@@ -232,11 +232,11 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
         if ([item.commonKey isEqualToString:AVMetadataCommonKeyTitle] &&
             [item.value isKindOfClass:NSString.class] &&
             [((NSString *)item.value) length]) {
-            track.title = item.value;
+            track.title = (NSString *)item.value;
         } else if ([item.commonKey isEqualToString:AVMetadataCommonKeyArtist] &&
                    [item.value isKindOfClass:NSString.class] &&
                    [((NSString *)item.value) length]) {
-            track.artist = item.value;
+            track.artist = (NSString *)item.value;
         }
     }
 
@@ -314,7 +314,8 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    return 1 + [self.store valueForKey:@"_tracks"].count;
+        NSArray *tracks = (NSArray *)[self.store valueForKey:@"_tracks"];
+    return 1 + tracks.count;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
