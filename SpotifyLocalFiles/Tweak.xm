@@ -393,10 +393,6 @@ static UIScrollView *SPFLargestScrollView(UIView *root) {
     return best;
 }
 
-static void SPFRemoveOldRows(UIView *view) {
-    UIView *rows = [view viewWithTag:SPFLocalRowsTag];
-    if (rows) [rows removeFromSuperview];
-}
 
 static void SPFPlayLocalTrackFromRow(SPFTrack *track) {
     [[SPFStore shared] playTrack:track];
