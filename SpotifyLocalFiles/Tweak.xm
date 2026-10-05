@@ -27,6 +27,7 @@ static AVAudioPlayer *SPFPlayer = nil;
 - (NSArray<SPFTrack *> *)tracksForPlaylist:(NSString *)playlist;
 - (void)playTrack:(SPFTrack *)track;
 - (void)addTrack:(SPFTrack *)track toPlaylist:(NSString *)playlist;
+- (NSURL *)storageURL;
 @property(nonatomic, copy) NSString *pendingPlaylist;
 @end
 
@@ -364,12 +365,6 @@ static BOOL SPFIsPlaylistViewController(UIViewController *vc) {
     if (!vc || !vc.viewIfLoaded.window) return NO;
     if (SPFViewTreeContainsPlaylistLabel(vc.view)) return YES;
 
-    // Some Spotify screens expose the playlist subtitle only through accessibility.
-    UIAccessibilityElement *focused = UIAccessibilityFocusedElement(UIAccessibilityNotificationVoiceOverIdentifier);
-    if ([focused isKindOfClass:NSString.class] &&
-        [(NSString *)focused rangeOfString:@"playlist" options:NSCaseInsensitiveSearch].location != NSNotFound) {
-        return YES;
-    }
 
     return NO;
 }
@@ -475,14 +470,28 @@ static void SPFInstallLocalRows(UIViewController *vc, NSString *playlist) {
     if (!scroll) return;
 
     UIView *rows = [scroll viewWithTag:SPFLocalRowsTag];
+    CGFloat baseHeight = MAX(scroll.contentSize.height, CGRectGetHeight(scroll.bounds));
+    if (rows.superview == scroll) {
+        baseHeight = MAX(CGRectGetHeight(scroll.bounds), CGRectGetMinY(rows.frame) - 6.0);
+    }
+
     if (tracks.count == 0) {
-        [rows removeFromSuperview];
+        if (rows.superview == scroll) {
+            [rows removeFromSuperview];
+            CGSize size = scroll.contentSize;
+            size.height = baseHeight;
+            scroll.contentSize = size;
+        }
         return;
     }
 
     NSString *signature = [NSString stringWithFormat:@"SpotifyLocalFiles:%@:%lu", playlist, (unsigned long)tracks.count];
     if (!rows || ![rows.accessibilityIdentifier isEqualToString:signature]) {
         [rows removeFromSuperview];
+
+        CGSize resetSize = scroll.contentSize;
+        resetSize.height = baseHeight;
+        scroll.contentSize = resetSize;
 
         CGFloat width = MAX(300.0, CGRectGetWidth(scroll.bounds));
         rows = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, tracks.count * 72.0 + 8.0)];
@@ -492,16 +501,15 @@ static void SPFInstallLocalRows(UIViewController *vc, NSString *playlist) {
 
         for (NSUInteger i = 0; i < tracks.count; i++) {
             UIView *row = SPFBuildLocalSongRow(tracks[i], width);
-            CGRect frame = row.frame;
-            frame.origin.y = i * 72.0;
-            row.frame = frame;
+            CGRect rowFrame = row.frame;
+            rowFrame.origin.y = i * 72.0;
+            row.frame = rowFrame;
             [rows addSubview:row];
         }
         [scroll addSubview:rows];
     }
 
-    CGFloat originalHeight = MAX(scroll.contentSize.height, CGRectGetHeight(scroll.bounds));
-    CGFloat y = originalHeight + 6.0;
+    CGFloat y = baseHeight + 6.0;
     CGRect frame = rows.frame;
     frame.origin.x = 0;
     frame.origin.y = y;
