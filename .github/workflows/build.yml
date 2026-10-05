@@ -18,13 +18,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare Theos
-        uses: Randomblock1/theos-action@v1
-        with:
-          theos-dir: theos
-          theos-src: https://github.com/theos/theos
-          theos-sdks: https://github.com/theos/sdks
-          theos-sdks-branch: master
+      - name: Prepare Theos and SDKs
+        run: |
+          set -euxo pipefail
+          brew install ldid make
+          PATH="$(brew --prefix make)/libexec/gnubin:$PATH"
+          git clone --depth 1 --recursive https://github.com/theos/theos theos
+          mkdir -p theos/sdks
+          cd theos/sdks
+          curl -L --fail -o master.zip https://github.com/theos/sdks/archive/refs/heads/master.zip
+          TMP=$(mktemp -d)
+          unzip -q master.zip -d "$TMP"
+          mv "$TMP"/*-master/*.sdk .
+          rm -rf master.zip "$TMP"
+          echo "THEOS=${{ github.workspace }}/theos" >> "$GITHUB_ENV"
+          echo "PATH=$PATH" >> "$GITHUB_ENV"
 
       - name: Build tweak
         working-directory: SpotifyLocalFiles
