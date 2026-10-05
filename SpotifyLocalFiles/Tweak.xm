@@ -235,37 +235,15 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
         }
     }
 
-    [_tracks addObject:track];
-    [self persist];
-
     NSString *playlist = self.pendingPlaylist ?: @"";
     self.pendingPlaylist = @"";
 
+    // A local file is a real row in the open playlist UI, while playback stays local.
+    track.playlist = playlist;
+    [_tracks addObject:track];
+    [self persist];
+
     dispatch_async(dispatch_get_main_queue(), ^{
-        UIViewController *top = [self currentSpotifyController];
-
-        UIAlertController *alert =
-            [UIAlertController alertControllerWithTitle:track.title
-                                                message:playlist.length
-                                                    ? [NSString stringWithFormat:@"%@\n\nLocal Files stores this track on the device.", playlist]
-                                                    : @"Local Files stores this track on the device."
-                                         preferredStyle:UIAlertControllerStyleAlert];
-
-        if (playlist.length) {
-            [alert addAction:[UIAlertAction actionWithTitle:@"Add to this playlist"
-                                                       style:UIAlertActionStyleDefault
-                                                     handler:^(__unused UIAlertAction *action) {
-                [self addTrack:track toPlaylist:playlist];
-                [[NSNotificationCenter defaultCenter] postNotificationName:@"SpotifyLocalFilesDidChange"
-                                                                    object:nil];
-            }]];
-        }
-
-        [alert addAction:[UIAlertAction actionWithTitle:@"Done"
-                                                   style:UIAlertActionStyleCancel
-                                                 handler:nil]];
-
-        [top presentViewController:alert animated:YES completion:nil];
         [[NSNotificationCenter defaultCenter] postNotificationName:@"SpotifyLocalFilesDidChange"
                                                             object:nil];
     });
@@ -365,107 +343,226 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
 @implementation SPFLocalButton
 @end
 
-@interface SPFPlaylistPanel : UIView
-@property(nonatomic, weak) UIViewController *owner;
-@end
+static const NSInteger SPFLocalButtonTag = 9048;
+static const NSInteger SPFLocalRowsTag = 9050;
 
-@implementation SPFPlaylistPanel
-@end
-
-static void SPFRemoveOldUI(UIViewController *vc) {
-    for (UIView *view in [vc.view.subviews copy]) {
-        if (view.tag == 9048 || view.tag == 9049) {
-            [view removeFromSuperview];
+static BOOL SPFViewTreeContainsPlaylistLabel(UIView *view) {
+    if ([view isKindOfClass:UILabel.class]) {
+        NSString *text = [(UILabel *)view text];
+        if (text.length && [text rangeOfString:@"playlist" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+            return YES;
         }
     }
+
+    for (UIView *child in view.subviews) {
+        if (SPFViewTreeContainsPlaylistLabel(child)) return YES;
+    }
+    return NO;
+}
+
+static BOOL SPFIsPlaylistViewController(UIViewController *vc) {
+    if (!vc || !vc.viewIfLoaded.window) return NO;
+    if (SPFViewTreeContainsPlaylistLabel(vc.view)) return YES;
+
+    // Some Spotify screens expose the playlist subtitle only through accessibility.
+    UIAccessibilityElement *focused = UIAccessibilityFocusedElement(UIAccessibilityNotificationVoiceOverIdentifier);
+    if ([focused isKindOfClass:NSString.class] &&
+        [(NSString *)focused rangeOfString:@"playlist" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+        return YES;
+    }
+
+    return NO;
+}
+
+static UIScrollView *SPFLargestScrollView(UIView *root) {
+    UIScrollView *best = nil;
+    CGFloat bestScore = 0;
+
+    NSMutableArray *stack = [NSMutableArray arrayWithObject:root ?: (UIView *)[UIView new]];
+    while (stack.count) {
+        UIView *view = stack.lastObject;
+        [stack removeLastObject];
+
+        if ([view isKindOfClass:UIScrollView.class] && view != root) {
+            UIScrollView *scroll = (UIScrollView *)view;
+            CGFloat area = CGRectGetWidth(scroll.bounds) * CGRectGetHeight(scroll.bounds);
+            CGFloat score = area + MIN(scroll.contentSize.height, 5000.0) * 120.0;
+            if (CGRectGetWidth(scroll.bounds) > 250.0 && CGRectGetHeight(scroll.bounds) > 250.0 && score > bestScore) {
+                best = scroll;
+                bestScore = score;
+            }
+        }
+
+        [stack addObjectsFromArray:view.subviews];
+    }
+    return best;
+}
+
+static void SPFRemoveOldRows(UIView *view) {
+    UIView *rows = [view viewWithTag:SPFLocalRowsTag];
+    if (rows) [rows removeFromSuperview];
+}
+
+static void SPFPlayLocalTrackFromRow(SPFTrack *track) {
+    [[SPFStore shared] playTrack:track];
+}
+
+static UIView *SPFBuildLocalSongRow(SPFTrack *track, CGFloat width) {
+    UIView *row = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, 72.0)];
+    row.backgroundColor = UIColor.clearColor;
+
+    UIImageView *art = [[UIImageView alloc] initWithFrame:CGRectMake(8, 6, 60, 60)];
+    art.backgroundColor = [UIColor colorWithWhite:0.13 alpha:1.0];
+    art.layer.cornerRadius = 4.0;
+    art.clipsToBounds = YES;
+
+    NSURL *fileURL = [[[SPFStore shared] storageURL] URLByAppendingPathComponent:track.filename ?: @""];
+    AVURLAsset *asset = [AVURLAsset URLAssetWithURL:fileURL options:nil];
+    for (AVMetadataItem *item in asset.commonMetadata) {
+        if ([item.commonKey isEqualToString:AVMetadataCommonKeyArtwork] && [item.value isKindOfClass:NSData.class]) {
+            UIImage *image = [UIImage imageWithData:(NSData *)item.value scale:2.0];
+            if (image) art.image = image;
+        }
+    }
+    if (!art.image) {
+        UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(60, 60)];
+        art.image = [renderer imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
+            [[UIColor colorWithWhite:0.11 alpha:1.0] setFill];
+            UIRectFill(CGRectMake(0, 0, 60, 60));
+            NSDictionary *attrs = @{
+                NSFontAttributeName: [UIFont systemFontOfSize:26.0 weight:UIFontWeightSemibold],
+                NSForegroundColorAttributeName: UIColor.whiteColor
+            };
+            [@"♪" drawAtPoint:CGPointMake(20, 15) withAttributes:attrs];
+        }];
+    }
+    [row addSubview:art];
+
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(80, 12, MAX(120.0, width - 126.0), 24)];
+    title.text = track.title.length ? track.title : @"Local audio";
+    title.textColor = UIColor.whiteColor;
+    title.font = [UIFont systemFontOfSize:17.0 weight:UIFontWeightSemibold];
+    title.lineBreakMode = NSLineBreakByTruncatingTail;
+    [row addSubview:title];
+
+    UILabel *artist = [[UILabel alloc] initWithFrame:CGRectMake(80, 38, MAX(120.0, width - 126.0), 20)];
+    artist.text = track.artist.length ? track.artist : @"Local File";
+    artist.textColor = [UIColor colorWithWhite:1.0 alpha:0.60];
+    artist.font = [UIFont systemFontOfSize:14.0 weight:UIFontWeightRegular];
+    artist.lineBreakMode = NSLineBreakByTruncatingTail;
+    [row addSubview:artist];
+
+    UIButton *hit = [UIButton buttonWithType:UIButtonTypeSystem];
+    hit.frame = row.bounds;
+    hit.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [hit addAction:[UIAction actionWithHandler:^(__unused UIAction *action) {
+        SPFPlayLocalTrackFromRow(track);
+    }] forControlEvents:UIControlEventTouchUpInside];
+    [row addSubview:hit];
+
+    UIView *divider = [[UIView alloc] initWithFrame:CGRectMake(80, 71, MAX(100.0, width - 80), 1)];
+    divider.backgroundColor = [UIColor colorWithWhite:1 alpha:0.08];
+    [row addSubview:divider];
+
+    return row;
+}
+
+static void SPFInstallLocalRows(UIViewController *vc, NSString *playlist) {
+    if (playlist.length == 0) return;
+
+    NSArray<SPFTrack *> *tracks = [[SPFStore shared] tracksForPlaylist:playlist];
+    UIScrollView *scroll = SPFLargestScrollView(vc.view);
+    if (!scroll) return;
+
+    UIView *rows = [scroll viewWithTag:SPFLocalRowsTag];
+    if (tracks.count == 0) {
+        [rows removeFromSuperview];
+        return;
+    }
+
+    NSString *signature = [NSString stringWithFormat:@"SpotifyLocalFiles:%@:%lu", playlist, (unsigned long)tracks.count];
+    if (!rows || ![rows.accessibilityIdentifier isEqualToString:signature]) {
+        [rows removeFromSuperview];
+
+        CGFloat width = MAX(300.0, CGRectGetWidth(scroll.bounds));
+        rows = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, tracks.count * 72.0 + 8.0)];
+        rows.tag = SPFLocalRowsTag;
+        rows.accessibilityIdentifier = signature;
+        rows.backgroundColor = UIColor.clearColor;
+
+        for (NSUInteger i = 0; i < tracks.count; i++) {
+            UIView *row = SPFBuildLocalSongRow(tracks[i], width);
+            CGRect frame = row.frame;
+            frame.origin.y = i * 72.0;
+            row.frame = frame;
+            [rows addSubview:row];
+        }
+        [scroll addSubview:rows];
+    }
+
+    CGFloat originalHeight = MAX(scroll.contentSize.height, CGRectGetHeight(scroll.bounds));
+    CGFloat y = originalHeight + 6.0;
+    CGRect frame = rows.frame;
+    frame.origin.x = 0;
+    frame.origin.y = y;
+    frame.size.width = MAX(300.0, CGRectGetWidth(scroll.bounds));
+    rows.frame = frame;
+    rows.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+
+    CGFloat neededHeight = y + rows.bounds.size.height + 18.0;
+    if (neededHeight > scroll.contentSize.height) {
+        CGSize size = scroll.contentSize;
+        size.height = neededHeight;
+        scroll.contentSize = size;
+    }
+    [scroll bringSubviewToFront:rows];
 }
 
 static void SPFInstallUI(UIViewController *vc) {
     if (!vc || !vc.view.window) return;
     if (![NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.spotify.client"]) return;
-
-    SPFRemoveOldUI(vc);
-
-    CGFloat width = CGRectGetWidth(vc.view.bounds);
-    SPFLocalButton *button = [SPFLocalButton buttonWithType:UIButtonTypeSystem];
-    button.tag = 9048;
-    button.owner = vc;
-    button.frame = CGRectMake(width - 64.0, 54.0, 50.0, 42.0);
-    button.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
-    button.backgroundColor = [UIColor colorWithWhite:0.07 alpha:0.92];
-    button.layer.cornerRadius = 20.0;
-    [button setTitle:@"♫+" forState:UIControlStateNormal];
-    [button setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-    button.titleLabel.font = [UIFont systemFontOfSize:16.0 weight:UIFontWeightBold];
-
-    [button addAction:[UIAction actionWithHandler:^(__unused UIAction *action) {
-        [[SPFStore shared] showLibraryFrom:vc];
-    }] forControlEvents:UIControlEventTouchUpInside];
-
-    [vc.view addSubview:button];
-    [vc.view bringSubviewToFront:button];
+    if (!SPFIsPlaylistViewController(vc)) return;
 
     NSString *playlist = [[SPFStore shared] playlistContextFrom:vc];
-    NSArray<SPFTrack *> *tracks = [[SPFStore shared] tracksForPlaylist:playlist];
+    if (playlist.length == 0) return;
 
-    if (tracks.count == 0) return;
-
-    CGFloat panelHeight = 60.0;
-    SPFPlaylistPanel *panel =
-        [[SPFPlaylistPanel alloc] initWithFrame:CGRectMake(10.0,
-                                                           CGRectGetHeight(vc.view.bounds) - panelHeight - 14.0,
-                                                           width - 20.0,
-                                                           panelHeight)];
-    panel.tag = 9049;
-    panel.autoresizingMask = UIViewAutoresizingFlexibleWidth |
-                             UIViewAutoresizingFlexibleTopMargin;
-    panel.backgroundColor = [UIColor colorWithWhite:0.04 alpha:0.94];
-    panel.layer.cornerRadius = 16.0;
-    panel.owner = vc;
-
-    UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(12, 4, 90, 20)];
-    label.text = @"LOCAL";
-    label.textColor = [UIColor colorWithWhite:1 alpha:0.65];
-    label.font = [UIFont systemFontOfSize:10.0 weight:UIFontWeightBold];
-    [panel addSubview:label];
-
-    UIScrollView *scroll =
-        [[UIScrollView alloc] initWithFrame:CGRectMake(8, 22, panel.bounds.size.width - 16, 32)];
-    scroll.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    scroll.showsHorizontalScrollIndicator = NO;
-
-    CGFloat x = 0;
-    for (SPFTrack *track in tracks) {
-        UIButton *item = [UIButton buttonWithType:UIButtonTypeSystem];
-        NSString *title = track.title.length ? track.title : @"Local";
-        item.frame = CGRectMake(x, 0, MAX(120.0, MIN(230.0, title.length * 7.0 + 58.0)), 28.0);
-        item.layer.cornerRadius = 13.0;
-        item.backgroundColor = [UIColor colorWithWhite:0.13 alpha:1.0];
-        [item setTitle:title forState:UIControlStateNormal];
-        [item setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-        item.titleLabel.font = [UIFont systemFontOfSize:12.0 weight:UIFontWeightSemibold];
-
-        [item addAction:[UIAction actionWithHandler:^(__unused UIAction *action) {
-            [[SPFStore shared] playTrack:track];
+    SPFLocalButton *button = (SPFLocalButton *)[vc.view viewWithTag:SPFLocalButtonTag];
+    if (!button) {
+        CGFloat width = CGRectGetWidth(vc.view.bounds);
+        button = [SPFLocalButton buttonWithType:UIButtonTypeSystem];
+        button.tag = SPFLocalButtonTag;
+        button.owner = vc;
+        button.frame = CGRectMake(width - 112.0, 54.0, 96.0, 52.0);
+        button.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+        button.backgroundColor = [UIColor colorWithWhite:0.07 alpha:0.96];
+        button.layer.cornerRadius = 26.0;
+        [button setTitle:@"♫+" forState:UIControlStateNormal];
+        [button setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+        button.titleLabel.font = [UIFont systemFontOfSize:20.0 weight:UIFontWeightBold];
+        [button addAction:[UIAction actionWithHandler:^(__unused UIAction *action) {
+            [[SPFStore shared] importFrom:vc];
         }] forControlEvents:UIControlEventTouchUpInside];
-
-        [scroll addSubview:item];
-        x += item.bounds.size.width + 8.0;
+        [vc.view addSubview:button];
+        [vc.view bringSubviewToFront:button];
     }
 
-    scroll.contentSize = CGSizeMake(x, 28.0);
-    [panel addSubview:scroll];
-    [vc.view addSubview:panel];
-    [vc.view bringSubviewToFront:panel];
+    SPFInstallLocalRows(vc, playlist);
 }
 
 static void (*SPFOriginalViewDidAppear)(UIViewController *self, SEL _cmd, BOOL animated) = NULL;
+static void (*SPFOriginalViewDidLayoutSubviews)(UIViewController *self, SEL _cmd) = NULL;
 
 static void SPFHookedViewDidAppear(UIViewController *self, SEL _cmd, BOOL animated) {
-    if (SPFOriginalViewDidAppear) {
-        SPFOriginalViewDidAppear(self, _cmd, animated);
-    }
+    if (SPFOriginalViewDidAppear) SPFOriginalViewDidAppear(self, _cmd, animated);
+    if (![NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.spotify.client"]) return;
 
+    dispatch_async(dispatch_get_main_queue(), ^{
+        SPFInstallUI(self);
+    });
+}
+
+static void SPFHookedViewDidLayoutSubviews(UIViewController *self, SEL _cmd) {
+    if (SPFOriginalViewDidLayoutSubviews) SPFOriginalViewDidLayoutSubviews(self, _cmd);
     if (![NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.spotify.client"]) return;
 
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -478,13 +575,16 @@ static void SPFInitialize(void) {
     if (![NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.spotify.client"]) return;
 
     Class vcClass = objc_getClass("UIViewController");
-    SEL selector = @selector(viewDidAppear:);
-    Method method = class_getInstanceMethod(vcClass, selector);
+    Method appear = class_getInstanceMethod(vcClass, @selector(viewDidAppear:));
+    if (appear) {
+        SPFOriginalViewDidAppear = (void (*)(UIViewController *, SEL, BOOL))method_getImplementation(appear);
+        method_setImplementation(appear, (IMP)SPFHookedViewDidAppear);
+    }
 
-    if (method) {
-        SPFOriginalViewDidAppear =
-            (void (*)(UIViewController *, SEL, BOOL))method_getImplementation(method);
-        method_setImplementation(method, (IMP)SPFHookedViewDidAppear);
+    Method layout = class_getInstanceMethod(vcClass, @selector(viewDidLayoutSubviews));
+    if (layout) {
+        SPFOriginalViewDidLayoutSubviews = (void (*)(UIViewController *, SEL))method_getImplementation(layout);
+        method_setImplementation(layout, (IMP)SPFHookedViewDidLayoutSubviews);
     }
 
     NSLog(@"[SpotifyLocalFiles] loaded - Spotify %@",
