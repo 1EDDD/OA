@@ -1,0 +1,57 @@
+name: Build SpotifyLocalFiles
+
+on:
+  push:
+    branches:
+      - main
+      - spotify-local-files
+    paths:
+      - "SpotifyLocalFiles/**"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare Theos
+        uses: Randomblock1/theos-action@v1
+        with:
+          theos-dir: theos
+          theos-src: https://github.com/theos/theos
+          theos-sdks: https://github.com/theos/sdks
+          theos-sdks-branch: master
+
+      - name: Build tweak
+        working-directory: SpotifyLocalFiles
+        env:
+          THEOS: ${{ github.workspace }}/theos
+        run: |
+          make clean
+          make package FINALPACKAGE=1
+
+      - name: Collect LiveContainer files
+        working-directory: SpotifyLocalFiles
+        run: |
+          set -eux
+          mkdir -p ../release
+          find .theos -type f -name "SpotifyLocalFiles.dylib" -print -exec cp {} ../release/SpotifyLocalFiles.dylib \;
+          cp SpotifyLocalFiles.plist ../release/SpotifyLocalFiles.plist
+          test -s ../release/SpotifyLocalFiles.dylib
+          ls -lh ../release
+
+      - name: Upload LiveContainer files
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpotifyLocalFiles-LiveContainer
+          path: release/*
+
+      - name: Upload Theos package
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpotifyLocalFiles-package
+          path: SpotifyLocalFiles/packages/*
